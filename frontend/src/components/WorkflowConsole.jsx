@@ -11,22 +11,53 @@ export default function WorkflowConsole() {
   const [otpInput, setOtpInput] = useState('');
   const ws = useRef(null);
   const feedRef = useRef(null);
+  const reconnectTimer = useRef(null);
+  const isMounted = useRef(true);
 
-  useEffect(() => {
-    ws.current = new WebSocket('ws://localhost:8000/ws');
+  const connectWebSocket = () => {
+    if (!isMounted.current) return;
 
-    ws.current.onmessage = (event) => {
+    const socket = new WebSocket('ws://localhost:8000/ws');
+
+    socket.onopen = () => {
+      console.log('[Scout] WebSocket connected');
+    };
+
+    socket.onmessage = (event) => {
       const data = JSON.parse(event.data);
       
       if (data.type === 'agent_state' || data.type === 'info') {
         setMessages((prev) => [...prev, data]);
+      } else if (data.type === 'done') {
+        setMessages((prev) => [...prev, { type: 'info', message: data.message }]);
+        setStatus('idle');
       } else if (data.type === 'pause') {
         setStatus('paused');
         setPauseData(data);
+        // Bring the React app to the front so the user sees the OTP modal
+        window.focus();
       }
     };
 
+    socket.onclose = () => {
+      console.log('[Scout] WebSocket closed, reconnecting in 2s...');
+      reconnectTimer.current = setTimeout(connectWebSocket, 2000);
+    };
+
+    socket.onerror = () => {
+      socket.close();
+    };
+
+    ws.current = socket;
+  };
+
+  useEffect(() => {
+    isMounted.current = true;
+    connectWebSocket();
+
     return () => {
+      isMounted.current = false;
+      clearTimeout(reconnectTimer.current);
       ws.current?.close();
     };
   }, []);

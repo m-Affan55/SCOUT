@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mock University Application Portal</title>
+    <style>
+        body { font-family: system-ui, sans-serif; background: #f3f4f6; color: #111827; padding: 40px; }
+        .container { max-width: 500px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        h2 { text-align: center; margin-top: 0; }
+        .step { display: none; }
+        .step.active { display: block; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; font-weight: 600; margin-bottom: 8px; font-size: 14px; }
+        input, select { width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; box-sizing: border-box; }
+        button { width: 100%; background: #2563eb; color: white; border: none; padding: 12px; border-radius: 6px; font-weight: 600; cursor: pointer; margin-top: 10px; }
+        button:hover { background: #1d4ed8; }
+        .success { text-align: center; color: #10b981; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Application Portal</h2>
+
+    <!-- Step 1: Basic Info -->
+    <div id="step-1" class="step active">
+        <div class="form-group">
+            <label for="first-name">First Name</label>
+            <input type="text" id="first-name" placeholder="John">
+        </div>
+        <div class="form-group">
+            <label for="last-name">Last Name</label>
+            <input type="text" id="last-name" placeholder="Doe">
+        </div>
+        <div class="form-group">
+            <label for="email">Email Address</label>
+            <input type="email" id="email" placeholder="john@example.com">
+        </div>
+        <div class="form-group">
+            <label for="program">Program of Interest</label>
+            <select id="program">
+                <option value="">Select a program...</option>
+                <option value="cs">Computer Science</option>
+                <option value="se">Software Engineering</option>
+                <option value="ai">Artificial Intelligence</option>
+            </select>
+        </div>
+        <button id="next-btn" onclick="goToStep2()">Next Step</button>
+    </div>
+
+    <!-- Step 2: OTP Verification -->
+    <div id="step-2" class="step">
+        <h3 style="text-align: center; color: #f59e0b;">Verification Required</h3>
+        <p style="text-align: center; font-size: 14px; color: #6b7280;">We've sent an OTP to your registered phone number. Please enter it below to proceed.</p>
+        <div class="form-group">
+            <label for="otp-input">Enter OTP</label>
+            <input type="text" id="otp-input" placeholder="e.g. 123456">
+        </div>
+        <button id="submit-btn" onclick="submitForm()">Submit Application</button>
+    </div>
+
+    <!-- Step 3: Success -->
+    <div id="step-3" class="step">
+        <div class="success">
+            <svg style="width: 64px; height: 64px; margin: 0 auto; display: block;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            <h3>Application Submitted!</h3>
+            <p style="color: #6b7280; font-size: 14px;">Your application has been received successfully.</p>
+        </div>
+    </div>
+</div>
+
+<script>
+    function goToStep2() {
+        // Simple validation
+        if(!document.getElementById('first-name').value || !document.getElementById('email').value) {
+            alert('Please fill out all fields.');
+            return;
+        }
+        document.getElementById('step-1').classList.remove('active');
+        document.getElementById('step-2').classList.add('active');
+    }
+
+    function submitForm() {
+        if(!document.getElementById('otp-input').value) {
+            alert('OTP is required.');
+            return;
+        }
+        document.getElementById('step-2').classList.remove('active');
+        document.getElementById('step-3').classList.add('active');
+    }
+</script>
+
+</body>
+</html>
