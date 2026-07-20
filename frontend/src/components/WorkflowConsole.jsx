@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Terminal, Bot, User, CheckCircle2, Loader2, Play, AlertCircle } from 'lucide-react';
-import OTPModal from './OTPModal';
+import InputModal from './InputModal';
 import '../styles/WorkflowConsole.css';
 
 export default function WorkflowConsole() {
@@ -31,11 +31,13 @@ export default function WorkflowConsole() {
       } else if (data.type === 'done') {
         setMessages((prev) => [...prev, { type: 'info', message: data.message }]);
         setStatus('idle');
+        // Show a popup to the user to signify the process is fully completed
+        window.alert("Process is completed");
       } else if (data.type === 'pause') {
         setStatus('paused');
         setPauseData(data);
-        // Bring the React app to the front so the user sees the OTP modal
-        window.focus();
+        // No need for window.focus() — the backend minimizes the Playwright
+        // browser via CDP, so the React app is naturally visible.
       }
     };
 
@@ -156,7 +158,7 @@ export default function WorkflowConsole() {
       </div>
 
       {status === 'paused' && (
-        <OTPModal 
+        <InputModal 
           pauseData={pauseData}
           otpInput={otpInput}
           setOtpInput={setOtpInput}

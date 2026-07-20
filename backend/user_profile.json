@@ -1,0 +1,60 @@
+{
+  "personal": {
+    "first_name": "Muhammad Affan",
+    "last_name": "Khan",
+    "father_name": "",
+    "date_of_birth": "2000-01-15",
+    "gender": "Male",
+    "cnic": 1234567890,
+    "phone": "+92-300-0000000",
+    "email": "affan@example.com",
+    "blood_group": "",
+    "religion": "",
+    "nationality": "Pakistani",
+    "domicile": "Punjab"
+  },
+  "address": {
+    "street": "",
+    "city": "Lahore",
+    "province": "Punjab",
+    "postal_code": "",
+    "country": "Pakistan"
+  },
+  "education": {
+    "matric": {
+      "board": "",
+      "year": null,
+      "marks": 1234,
+      "total": null,
+      "grade": ""
+    },
+    "intermediate": {
+      "board": "",
+      "year": null,
+      "marks": 1111,
+      "total": null,
+      "group": ""
+    },
+    "bachelors": {
+      "university": "",
+      "degree": "BS Computer Science",
+      "cgpa": null,
+      "year": null
+    }
+  },
+  "professional": {
+    "linkedin": "",
+    "github": "github.com/m-Affan55",
+    "years_of_experience": null,
+    "current_company": "",
+    "designation": "",
+    "skills": []
+  },
+  "documents": {
+    "cnic_front": "",
+    "cnic_back": "",
+    "passport_photo": "",
+    "resume": "",
+    "domicile_certificate": ""
+  }
+}
