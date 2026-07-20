@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Complex Application Portal</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f3f4f6;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        .container {
+            background-color: white;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 500px;
+        }
+        h2 { text-align: center; color: #1f2937; margin-bottom: 0.5rem; }
+        .step { display: none; }
+        .step.active { display: block; }
+        .form-group { margin-bottom: 1rem; }
+        label { display: block; margin-bottom: 0.5rem; color: #374151; font-weight: 500; font-size: 0.875rem; }
+        input, select {
+            width: 100%; padding: 0.75rem;
+            border: 1px solid #d1d5db; border-radius: 4px;
+            box-sizing: border-box; font-size: 1rem;
+        }
+        input:focus, select:focus {
+            outline: none; border-color: #3b82f6; ring: 2px solid #3b82f6;
+        }
+        button {
+            width: 100%; padding: 0.75rem;
+            background-color: #2563eb; color: white;
+            border: none; border-radius: 4px; font-size: 1rem;
+            font-weight: 600; cursor: pointer; margin-top: 1rem;
+        }
+        button:hover { background-color: #1d4ed8; }
+        .success-icon { text-align: center; font-size: 48px; margin-bottom: 1rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Step 1: Personal Info (Different field names from dummy-portal 1) -->
+        <div id="step1" class="step active">
+            <h2>Student Registration</h2>
+            <div class="form-group">
+                <label for="applicantName">Full Name of Applicant</label>
+                <input type="text" id="applicantName" name="applicant_full_name" placeholder="E.g., John Doe">
+            </div>
+            <div class="form-group">
+                <label for="applicantCnic">CNIC / B-Form Number</label>
+                <input type="text" id="applicantCnic" name="national_id" placeholder="xxxxx-xxxxxxx-x">
+            </div>
+            <div class="form-group">
+                <label for="applicantDomicile">Province of Domicile</label>
+                <select id="applicantDomicile" name="domicile_province">
+                    <option value="">Select Province</option>
+                    <option value="Punjab">Punjab</option>
+                    <option value="Sindh">Sindh</option>
+                    <option value="KPK">KPK</option>
+                    <option value="Balochistan">Balochistan</option>
+                </select>
+            </div>
+            <button id="btnContinue" onclick="nextStep(2)">Continue to Academics</button>
+        </div>
+
+        <!-- Step 2: Education Info -->
+        <div id="step2" class="step">
+            <h2>Academic Details</h2>
+            <div class="form-group">
+                <label for="matricMarks">Matriculation Marks</label>
+                <input type="number" id="matricMarks" placeholder="Obtained Marks">
+            </div>
+            <div class="form-group">
+                <label for="fscMarks">FSc / A-Levels Marks</label>
+                <input type="number" id="fscMarks" placeholder="Obtained Marks">
+            </div>
+            <div class="form-group">
+                <label for="programPref">Program Preference</label>
+                <select id="programPref">
+                    <option value="BSCS">BS Computer Science</option>
+                    <option value="BSSE">BS Software Engineering</option>
+                    <option value="BBA">Bachelors of Business Admin</option>
+                </select>
+            </div>
+            <button id="btnSubmitForm" onclick="nextStep(3)">Submit Application</button>
+        </div>
+
+        <!-- Step 3: Success -->
+        <div id="step3" class="step">
+            <div class="success-icon">✅</div>
+            <h2>Application Received</h2>
+            <p style="text-align: center; color: #4b5563;">Your application for admission has been submitted successfully.</p>
+        </div>
+    </div>
+
+    <script>
+        function nextStep(step) {
+            document.querySelectorAll('.step').forEach(el => el.classList.remove('active'));
+            document.getElementById('step' + step).classList.add('active');
+        }
+    </script>
+</body>
+</html>
