@@ -136,9 +136,10 @@ async def run_agent_workflow(goal: str):
                             "step": "Analyzer",
                             "message": state_update.get("user_input_message", "Human input required."),
                             "input_type": state_update.get("user_input_type", "info"),
-                            "field_key": state_update.get("browser_state", {}).get("pending_field_key", "")
+                            "field_key": state_update.get("browser_state", {}).get("pending_field_key", ""),
+                            "focus_app": state_update.get("browser_state", {}).get("pending_field_key") != "captcha_solved",
                         })
-                        return 
+                        return
                     else:
                         action = state_update.get("browser_state", {}).get("action", "unknown")
                         await manager.broadcast({"type": "agent_state", "step": "Analyzer", "message": f"Decided next action: {action}"})
@@ -158,8 +159,18 @@ async def run_agent_workflow(goal: str):
 async def resume_agent_workflow(user_input: str):
     config = get_config()
     current_state = app_graph.get_state(config).values
-    if current_state:
-        app_graph.update_state(config, {"user_provided_input": user_input, "requires_user_input": False}, as_node="user_interaction")
+    if not current_state:
+        await manager.broadcast({"type": "info", "message": "No paused workflow found to resume."})
+        return
+
+    app_graph.update_state(
+        config,
+        {
+            "user_provided_input": user_input,
+            "requires_user_input": False,
+        },
+        as_node="user_interaction",
+    )
     
     try:
         async for event in app_graph.astream(None, config=config):
@@ -171,7 +182,8 @@ async def resume_agent_workflow(user_input: str):
                             "step": "Analyzer",
                             "message": state_update.get("user_input_message", "Human input required."),
                             "input_type": state_update.get("user_input_type", "info"),
-                            "field_key": state_update.get("browser_state", {}).get("pending_field_key", "")
+                            "field_key": state_update.get("browser_state", {}).get("pending_field_key", ""),
+                            "focus_app": state_update.get("browser_state", {}).get("pending_field_key") != "captcha_solved",
                         })
                         return
                     else:

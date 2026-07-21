@@ -5,7 +5,7 @@ import re
 from dotenv import load_dotenv
 from typing import TypedDict, Annotated, Sequence, Any
 from langgraph.graph import StateGraph, END
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from pydantic import BaseModel, Field
 from app.services.playwright_service import playwright_service
 from app.services.dom_extractor import dom_extractor
@@ -14,7 +14,7 @@ from langgraph.checkpoint.memory import MemorySaver
 load_dotenv()
 
 # Initialize LLM
-llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0)
+llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
 
 PROFILE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "user_profile.json")
 
@@ -33,16 +33,17 @@ def save_to_profile(field_key: str, value: str):
     except Exception:
         profile = {}
     
-    # Walk the dot-separated key path and set the value
-    keys = field_key.split(".")
-    obj = profile
-    for k in keys[:-1]:
-        if k not in obj or not isinstance(obj[k], dict):
-            obj[k] = {}
-        obj = obj[k]
-    
-    # Store the value as a string safely to prevent data loss (like leading zeroes in phone numbers)
-    obj[keys[-1]] = str(value)
+    # Top-level keys like "clarification" don't use dot notation
+    if "." not in field_key:
+        profile[field_key] = str(value)
+    else:
+        keys = field_key.split(".")
+        obj = profile
+        for k in keys[:-1]:
+            if k not in obj or not isinstance(obj[k], dict):
+                obj[k] = {}
+            obj = obj[k]
+        obj[keys[-1]] = str(value)
     
     try:
         with open(PROFILE_PATH, "w") as f:
@@ -50,6 +51,107 @@ def save_to_profile(field_key: str, value: str):
         print(f"[Profile] Saved '{field_key}' = '{value}' to user_profile.json")
     except Exception as e:
         print(f"[Profile] Failed to save: {e}")
+
+def parse_llm_json(text: str) -> dict:
+    text = text.strip()
+    if text.startswith("```json"):
+        text = text[7:]
+    if text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    text = text.strip()
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1:
+            return json.loads(text[start:end + 1])
+        raise ValueError("No JSON found")
+
+async def resolve_clarification_click(
+    user_input: str,
+    tree: list[dict],
+    goal: str,
+    pause_message: str,
+) -> dict:
+    """Turn a user's navigation clarification into a concrete click action."""
+    nav_elements = [el for el in tree if el.get("tag") in ("a", "button")]
+    if not nav_elements:
+        return {"action": "unknown"}
+
+    nav_text = dom_extractor.format_tree_for_llm(nav_elements)
+    prompt = f"""You are a web navigation assistant.
+
+User goal: {goal}
+You previously asked: "{pause_message}"
+User answered: "{user_input}"
+
+Available navigation elements:
+{nav_text}
+
+Pick the ONE element index that best matches the user's answer.
+Return ONLY valid JSON in this format:
+{{"action": "click", "click": 5}}
+
+Rules:
+- You MUST return a click action.
+- Do NOT pause or ask another question.
+- Match keywords from the user's answer to link/button labels or hrefs."""
+
+    response = await llm.ainvoke(prompt)
+    content = response.content
+    text = "".join([str(part.get("text", "")) for part in content if "text" in part]) if isinstance(content, list) else str(content)
+    decision = parse_llm_json(text)
+    if decision.get("action") != "click":
+        decision = {"action": "click", "click": nav_elements[0]["index"]}
+    return decision
+
+async def resolve_field_fill(
+    user_input: str,
+    pending_key: str,
+    tree: list[dict],
+    pause_message: str,
+) -> dict | None:
+    """Fill the most likely empty form field using the user's answer."""
+    empty_inputs = [
+        el for el in tree
+        if el.get("tag") in ("input", "textarea", "select")
+        and not el.get("value")
+    ]
+    if not empty_inputs:
+        return None
+
+    if len(empty_inputs) == 1:
+        target = empty_inputs[0]
+        return {
+            "action": "fill_and_click",
+            "fills": [{"index": target["index"], "value": user_input}],
+            "click": None,
+        }
+
+    fields_text = dom_extractor.format_tree_for_llm(empty_inputs)
+    prompt = f"""You asked the user: "{pause_message}"
+The user answered: "{user_input}"
+Profile field key: "{pending_key}"
+
+Empty form fields on the page:
+{fields_text}
+
+Return ONLY valid JSON to fill the field that matches the question:
+{{"action": "fill_and_click", "fills": [{{"index": 1, "value": "{user_input}"}}], "click": null}}
+
+Rules:
+- Use the user's exact answer as the value.
+- Pick the single best matching empty field index.
+- Do NOT pause or ask another question."""
+
+    response = await llm.ainvoke(prompt)
+    content = response.content
+    text = "".join([str(part.get("text", "")) for part in content if "text" in part]) if isinstance(content, list) else str(content)
+    return parse_llm_json(text)
 
 class AgentState(TypedDict):
     goal: str
@@ -151,11 +253,12 @@ async def analyzer_node(state: AgentState):
     if state["current_step"] == 0:
         if state.get("requires_user_input") and not state.get("user_provided_input"):
             # Planner requested user input for URL, minimize and pass it through
-            await playwright_service.minimize_window()
+            await playwright_service.yield_to_user()
             return {
                 "requires_user_input": True,
                 "user_input_message": state.get("user_input_message", "Please provide the required information."),
-                "user_input_type": state.get("user_input_type", "info")
+                "user_input_type": state.get("user_input_type", "info"),
+                "browser_state": state.get("browser_state", {}),
             }
             
         target_url = state.get("current_url")
@@ -209,21 +312,20 @@ async def analyzer_node(state: AgentState):
 
     # Check if we just received user input
     user_input = state.get("user_provided_input", "")
+    pending_key = state.get("browser_state", {}).get("pending_field_key", "")
+    pause_message = state.get("user_input_message", "")
     
     # If the user just provided a value, save it to user_profile.json so we never ask again
-    if user_input:
-        pending_key = state.get("browser_state", {}).get("pending_field_key", "")
-        if pending_key:
-            if pending_key == "captcha_solved":
-                save_to_profile(pending_key, state.get("current_url", ""))
-            else:
-                save_to_profile(pending_key, user_input)
-            # Reload the profile so the LLM sees the updated data
-            try:
-                with open(PROFILE_PATH, "r") as f:
-                    user_profile = json.load(f)
-            except Exception:
-                pass
+    if user_input and pending_key:
+        if pending_key == "captcha_solved":
+            save_to_profile(pending_key, state.get("current_url", ""))
+        else:
+            save_to_profile(pending_key, user_input)
+        try:
+            with open(PROFILE_PATH, "r") as f:
+                user_profile = json.load(f)
+        except Exception:
+            pass
     
     # Check if the page shows an OTP/verification screen
     try:
@@ -247,7 +349,7 @@ async def analyzer_node(state: AgentState):
 
     if has_captcha and not user_input and user_profile.get("captcha_solved") != state.get("current_url", ""):
         print("[Analyzer] CAPTCHA detected. Pausing for manual intervention.")
-        await playwright_service.minimize_window()
+        await playwright_service.restore_window()
         return {
             "requires_user_input": True,
             "user_input_message": "A CAPTCHA has been detected on the page. Please interact with the browser directly to solve it, then click Resume.",
@@ -286,7 +388,7 @@ async def analyzer_node(state: AgentState):
 
     if is_otp_screen and not user_input:
         print(f"[Analyzer] OTP screen detected, pausing for user input.")
-        await playwright_service.minimize_window()
+        await playwright_service.yield_to_user()
         return {
             "requires_user_input": True,
             "user_input_message": "An OTP has been sent to your phone. Please enter it below.",
@@ -294,12 +396,52 @@ async def analyzer_node(state: AgentState):
             "dom_tree": tree,
         }
 
+    # --- Fast-path: user just answered a clarification or form-field question ---
+    if user_input and pending_key and pending_key not in ("captcha_solved", "system.target_url"):
+        try:
+            if pending_key == "clarification":
+                print(f"[Analyzer] Resolving navigation clarification: '{user_input}'")
+                decision = await resolve_clarification_click(
+                    user_input, tree, state["goal"], pause_message
+                )
+            else:
+                print(f"[Analyzer] Resolving form field answer for '{pending_key}': '{user_input}'")
+                decision = await resolve_field_fill(
+                    user_input, pending_key, tree, pause_message
+                )
+                if not decision:
+                    decision = None
+
+            if decision and decision.get("action") not in (None, "pause", "unknown"):
+                print(f"[Analyzer] Using direct resume action: {decision}")
+                return {
+                    "requires_user_input": False,
+                    "user_input_message": "",
+                    "browser_state": decision,
+                    "dom_tree": tree,
+                }
+        except Exception as e:
+            print(f"[Analyzer] Direct resume handling failed, falling back to LLM: {e}")
+
     # Let the LLM determine if the page is a success or if more actions are needed.
 
     # --- Build context for the LLM ---
     user_input_context = ""
-    if user_input:
-        user_input_context = f"\nIMPORTANT: The user just provided this value: '{user_input}'. You MUST use it to fill the field that was previously missing."
+    if user_input and pending_key:
+        if pending_key == "clarification":
+            user_input_context = f"""
+CRITICAL — USER CLARIFICATION RECEIVED: "{user_input}"
+You previously asked: "{pause_message}"
+You MUST click the navigation element that best matches "{user_input}".
+Do NOT pause again for the same question."""
+        else:
+            user_input_context = f"""
+CRITICAL — USER PROVIDED MISSING DATA:
+- Field key: {pending_key}
+- Value: "{user_input}"
+- Previous question: "{pause_message}"
+You MUST fill the matching empty form field with "{user_input}".
+This value is already saved in the user profile. Do NOT ask for "{pending_key}" again."""
 
     previous_action_context = ""
     last_action = state.get("browser_state", {})
@@ -328,6 +470,7 @@ USER PROFILE DATA:
 STRICT RULES:
 1. Determine if this is a NAVIGATION page (e.g. homepage, menus, no form fields to fill) or a FORM page.
    - If it's a NAVIGATION page: Find the link or button that best matches the CURRENT STEP in the plan, and click it.
+   - If USER PROFILE contains "clarification", use that value to choose the correct navigation link without asking again.
    - If the user's intent is ambiguous (e.g., 'apply' could mean Admissions or Careers) and you aren't 100% sure which link to click, you MUST pause and ask the user for clarification.
 
 2. ANTI-HALLUCINATION PROTOCOL:
@@ -373,27 +516,7 @@ Page is done:
             text = "".join([str(part.get("text", "")) for part in content if "text" in part])
         else:
             text = str(content)
-            
-        # Clean markdown formatting if present
-        text = text.strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.startswith("```"):
-            text = text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
-        
-        try:
-            decision = json.loads(text)
-        except json.JSONDecodeError:
-            # Basic fallback
-            start = text.find('{')
-            end = text.rfind('}')
-            if start != -1 and end != -1:
-                decision = json.loads(text[start:end+1])
-            else:
-                raise ValueError("No JSON found")
+        decision = parse_llm_json(text)
     except Exception as e:
         print(f"Error parsing LLM response in analyzer: {e}")
         decision = {"action": "unknown"}
@@ -403,17 +526,29 @@ Page is done:
     if decision.get("action") == "pause":
         pause_message = decision.get("message", "Additional information is required.")
         field_key = decision.get("field_key", "")
-        # MINIMIZE the browser so the React app becomes visible to the user
-        await playwright_service.minimize_window()
-            
-        return {
-            "requires_user_input": True,
-            "user_input_message": pause_message,
-            "user_input_type": "info",
-            "dom_tree": tree,
-            # Stash the field_key so resume can save the value to profile
-            "browser_state": {"pending_field_key": field_key},
-        }
+
+        # Prevent asking the same question twice in a row
+        if (
+            user_input
+            and pending_key
+            and field_key == pending_key
+            and pause_message.strip().lower() == state.get("user_input_message", "").strip().lower()
+        ):
+            print(f"[Analyzer] Blocking repeated pause for '{field_key}'")
+            decision = {
+                "action": "fill_and_click",
+                "fills": [{"index": tree[0]["index"], "value": user_input}] if tree else [],
+                "click": None,
+            }
+        else:
+            await playwright_service.yield_to_user()
+            return {
+                "requires_user_input": True,
+                "user_input_message": pause_message,
+                "user_input_type": "info",
+                "dom_tree": tree,
+                "browser_state": {"pending_field_key": field_key},
+            }
         
     return {"requires_user_input": False, "browser_state": decision, "dom_tree": tree}
 
@@ -428,54 +563,59 @@ async def automator_node(state: AgentState):
                 return el.get('selector'), el.get('iframe_index')
         return None, None
     
-    if action == "navigate":
-        await playwright_service.navigate(state["current_url"])
-        await asyncio.sleep(1)  # Let the page load visually
-        
-    elif action == "click":
-        click_index = decision.get("click")
-        if click_index:
-            click_selector, iframe_index = get_element_info(click_index)
-            if click_selector:
-                await playwright_service.click_element(click_selector, iframe_index=iframe_index)
-                await asyncio.sleep(2) # Wait for navigation or modal
-                
-    elif action == "fill_and_click" or action == "fill":
-        fills = decision.get("fills", [])
-        if not fills and "fields" in decision:
-            fills = decision["fields"]
+    try:
+        if action == "navigate":
+            await playwright_service.navigate(state["current_url"], bring_to_front=False)
             
-        # If the user just provided input, RESTORE the browser so the user can watch
-        if state.get("user_provided_input"):
+        elif action == "click":
             await playwright_service.restore_window()
-            await asyncio.sleep(0.5)
-        
-        for f in fills:
-            selector = f.get("selector")
-            iframe_index = None
-            if not selector and "index" in f:
-                selector, iframe_index = get_element_info(f["index"])
+            click_index = decision.get("click")
+            if click_index:
+                click_selector, iframe_index = get_element_info(click_index)
+                if click_selector:
+                    await playwright_service.click_element(click_selector, iframe_index=iframe_index)
+                    
+        elif action == "fill_and_click" or action == "fill":
+            fills = decision.get("fills", [])
+            if not fills and "fields" in decision:
+                fills = decision["fields"]
                 
-            if selector:
-                # Check if it's a select element
-                el_data = next((e for e in dom_tree if e.get('selector') == selector), None)
-                if el_data and el_data.get('tag') == 'select':
-                    await playwright_service.select_option(selector, label=str(f["value"]), iframe_index=iframe_index)
-                else:
-                    await playwright_service.fill_input(selector, str(f["value"]), iframe_index=iframe_index)
-                await asyncio.sleep(0.5)  # Pause between each field so user can watch
-        
-        click_index = decision.get("click")
-        if click_index:
-            click_selector, iframe_index = get_element_info(click_index)
-            if click_selector:
-                await asyncio.sleep(0.5)  # Brief pause before clicking
-                await playwright_service.click_element(click_selector, iframe_index=iframe_index)
-        
-        await asyncio.sleep(1)  # Let the page transition visually
+            # Show the browser while the agent performs visible form actions
+            await playwright_service.restore_window()
+            
+            for f in fills:
+                selector = f.get("selector")
+                iframe_index = None
+                if not selector and "index" in f:
+                    selector, iframe_index = get_element_info(f["index"])
+                    
+                if selector:
+                    # Check element tag and type
+                    el_data = next((e for e in dom_tree if e.get('selector') == selector), None)
+                    if el_data and el_data.get('tag') == 'select':
+                        await playwright_service.select_option(selector, label=str(f["value"]), iframe_index=iframe_index)
+                    elif el_data and el_data.get('type') in ('radio', 'checkbox'):
+                        await playwright_service.check_element(selector, iframe_index=iframe_index)
+                    else:
+                        await playwright_service.fill_input(selector, str(f["value"]), iframe_index=iframe_index)
+            
+            click_index = decision.get("click")
+            if click_index:
+                click_selector, iframe_index = get_element_info(click_index)
+                if click_selector:
+                    await playwright_service.click_element(click_selector, iframe_index=iframe_index)
+                    
+    except Exception as e:
+        print(f"[Automator] Action failed: {e}")
 
     current_url = playwright_service.page.url if playwright_service.page else state.get("current_url", "")
-    return {"current_step": state["current_step"] + 1, "user_provided_input": "", "current_url": current_url}
+    return {
+        "current_step": state["current_step"] + 1,
+        "user_provided_input": "",
+        "user_input_message": "",
+        "current_url": current_url,
+        "browser_state": {},
+    }
 
 # Dummy node for interrupt
 def user_interaction_node(state: AgentState):

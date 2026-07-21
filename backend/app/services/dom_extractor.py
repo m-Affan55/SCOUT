@@ -77,9 +77,10 @@ class DOMExtractor:
                     }
                     
                     // Build CSS selector
-                    let selector = el.id ? `#${el.id}` : null;
+                    let selector = el.id ? `#${CSS.escape(el.id)}` : null;
                     if (!selector && el.name) {
-                        selector = `${tag}[name="${el.name}"]`;
+                        const escapedName = el.name.replace(/"/g, '\\"');
+                        selector = `${tag}[name="${escapedName}"]`;
                     }
                     if (!selector) {
                         let path = [];
@@ -87,7 +88,7 @@ class DOMExtractor:
                         while (current && current.tagName !== 'HTML') {
                             let step = current.tagName.toLowerCase();
                             if (current.id) {
-                                step += `#${current.id}`;
+                                step += `#${CSS.escape(current.id)}`;
                                 path.unshift(step);
                                 break;
                             }

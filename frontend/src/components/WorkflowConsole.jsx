@@ -14,6 +14,33 @@ export default function WorkflowConsole() {
   const reconnectTimer = useRef(null);
   const isMounted = useRef(true);
 
+  const notifyUserActionRequired = (data) => {
+    // Bring the Scout app back to the foreground when human input is needed
+    if (data.focus_app !== false) {
+      window.focus();
+    }
+
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification('Scout needs your input', {
+        body: data.message,
+        tag: 'scout-pause',
+      });
+    } else if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+
+    const originalTitle = document.title;
+    let blinkCount = 0;
+    const blinkTimer = setInterval(() => {
+      document.title = blinkCount % 2 === 0 ? 'Action Required — Scout' : originalTitle;
+      blinkCount += 1;
+      if (blinkCount >= 6) {
+        clearInterval(blinkTimer);
+        document.title = originalTitle;
+      }
+    }, 700);
+  };
+
   const connectWebSocket = () => {
     if (!isMounted.current) return;
 
@@ -36,8 +63,7 @@ export default function WorkflowConsole() {
       } else if (data.type === 'pause') {
         setStatus('paused');
         setPauseData(data);
-        // No need for window.focus() — the backend minimizes the Playwright
-        // browser via CDP, so the React app is naturally visible.
+        notifyUserActionRequired(data);
       }
     };
 
@@ -56,6 +82,10 @@ export default function WorkflowConsole() {
   useEffect(() => {
     isMounted.current = true;
     connectWebSocket();
+
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
 
     return () => {
       isMounted.current = false;
