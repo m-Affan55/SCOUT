@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Terminal, Bot, User, CheckCircle2, Loader2, Play, AlertCircle } from 'lucide-react';
+import { Terminal, Bot, User, CheckCircle2, Loader2, Play, AlertCircle, Square } from 'lucide-react';
 import InputModal from './InputModal';
 import '../styles/WorkflowConsole.css';
 
@@ -13,6 +13,33 @@ export default function WorkflowConsole() {
   const feedRef = useRef(null);
   const reconnectTimer = useRef(null);
   const isMounted = useRef(true);
+
+  const notifyUserActionRequired = (data) => {
+    // Bring the Scout app back to the foreground when human input is needed
+    if (data.focus_app !== false) {
+      window.focus();
+    }
+
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification('Scout needs your input', {
+        body: data.message,
+        tag: 'scout-pause',
+      });
+    } else if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+
+    const originalTitle = document.title;
+    let blinkCount = 0;
+    const blinkTimer = setInterval(() => {
+      document.title = blinkCount % 2 === 0 ? 'Action Required — Scout' : originalTitle;
+      blinkCount += 1;
+      if (blinkCount >= 6) {
+        clearInterval(blinkTimer);
+        document.title = originalTitle;
+      }
+    }, 700);
+  };
 
   const connectWebSocket = () => {
     if (!isMounted.current) return;
@@ -36,8 +63,7 @@ export default function WorkflowConsole() {
       } else if (data.type === 'pause') {
         setStatus('paused');
         setPauseData(data);
-        // No need for window.focus() — the backend minimizes the Playwright
-        // browser via CDP, so the React app is naturally visible.
+        notifyUserActionRequired(data);
       }
     };
 
@@ -56,6 +82,10 @@ export default function WorkflowConsole() {
   useEffect(() => {
     isMounted.current = true;
     connectWebSocket();
+
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
 
     return () => {
       isMounted.current = false;
@@ -89,14 +119,27 @@ export default function WorkflowConsole() {
     }
   };
 
+  const handleStop = async () => {
+    try {
+      await fetch('http://localhost:8000/api/workflow/stop', {
+        method: 'POST'
+      });
+      setStatus('idle');
+      setPauseData(null);
+    } catch (error) {
+      console.error("Failed to stop workflow:", error);
+    }
+  };
+
   const handleResume = async () => {
-    if (!otpInput.trim()) return;
+    // If it's a captcha, we don't need text input
+    if (pauseData?.field_key !== 'captcha_solved' && !otpInput.trim()) return;
 
     try {
       await fetch('http://localhost:8000/api/workflow/resume', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: otpInput })
+        body: JSON.stringify({ input: otpInput || 'solved' })
       });
       setStatus('running');
       setPauseData(null);
@@ -144,17 +187,28 @@ export default function WorkflowConsole() {
           placeholder="What do you want to automate?" 
           value={goal}
           onChange={(e) => setGoal(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && handleStart()}
+          onKeyDown={(e) => e.key === 'Enter' && status === 'idle' && handleStart()}
           disabled={status !== 'idle'}
         />
-        <button 
-          className="btn-primary" 
-          onClick={handleStart}
-          disabled={status !== 'idle' || !goal.trim()}
-        >
-          <Play size={16} fill="currentColor" />
-          Run
-        </button>
+        {status === 'idle' ? (
+          <button 
+            className="btn-primary" 
+            onClick={handleStart}
+            disabled={!goal.trim()}
+          >
+            <Play size={16} fill="currentColor" />
+            Run
+          </button>
+        ) : (
+          <button 
+            className="btn-primary" 
+            style={{ backgroundColor: '#ef4444', borderColor: '#ef4444' }}
+            onClick={handleStop}
+          >
+            <Square size={16} fill="currentColor" />
+            Stop
+          </button>
+        )}
       </div>
 
       {status === 'paused' && (

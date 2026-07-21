@@ -15,9 +15,10 @@ export default function InputModal({ pauseData, otpInput, setOtpInput, handleRes
   if (!pauseData) return null;
 
   const isOtp = pauseData.input_type === 'otp';
+  const isCaptcha = pauseData.field_key === 'captcha_solved';
 
   const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && otpInput.trim()) {
+    if (e.key === 'Enter' && (isCaptcha || otpInput.trim())) {
       handleResume();
     }
   };
@@ -35,22 +36,26 @@ export default function InputModal({ pauseData, otpInput, setOtpInput, handleRes
         <h2>{isOtp ? 'OTP Verification' : 'Information Required'}</h2>
         <p>{pauseData.message}</p>
 
-        <input 
-          ref={inputRef}
-          type="text" 
-          className="modal-input"
-          placeholder={isOtp ? 'Enter the OTP code' : 'Enter the requested information'}
-          value={otpInput}
-          onChange={(e) => setOtpInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          autoComplete="off"
-        />
+        {isCaptcha ? (
+          <p className="captcha-instruction">Please interact with the browser directly to solve the CAPTCHA, then click Resume.</p>
+        ) : (
+          <input 
+            ref={inputRef}
+            type="text" 
+            className="modal-input"
+            placeholder={isOtp ? 'Enter the OTP code' : 'Enter the requested information'}
+            value={otpInput}
+            onChange={(e) => setOtpInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            autoComplete="off"
+          />
+        )}
         <button 
           className="btn-primary btn-full" 
           onClick={handleResume}
-          disabled={!otpInput.trim()}
+          disabled={!isCaptcha && !otpInput.trim()}
         >
-          Submit & Resume
+          {isCaptcha ? 'Resume' : 'Submit & Resume'}
         </button>
       </div>
     </div>

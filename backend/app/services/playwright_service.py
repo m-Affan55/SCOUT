@@ -27,32 +27,53 @@ class PlaywrightService:
         except Exception:
             pass
 
-    async def navigate(self, url: str):
+    async def navigate(self, url: str, bring_to_front: bool = False):
         # Check if the page is missing OR if the user manually closed the browser window
         if not self.page or self.page.is_closed():
             await self.start()
         
         try:
-            await self.page.goto(url)
-            await self.restore_window()
+            if bring_to_front:
+                await self.restore_window()
+            await self.page.goto(url, wait_until="domcontentloaded", timeout=60000)
         except Exception as e:
             # Fallback if the connection was lost just before navigating
             print(f"[PlaywrightService] Connection error during goto, restarting browser: {e}")
             await self.start()
-            await self.page.goto(url)
-            await self.restore_window()
+            if bring_to_front:
+                await self.restore_window()
+            await self.page.goto(url, wait_until="domcontentloaded", timeout=60000)
 
-    async def fill_input(self, selector: str, text: str):
-        await self.page.fill(selector, text)
+    async def fill_input(self, selector: str, text: str, iframe_index: int = None):
+        if iframe_index is not None:
+            await self.page.locator('iframe').nth(iframe_index).content_frame.locator(selector).fill(text, timeout=3000)
+        else:
+            await self.page.fill(selector, text, timeout=3000)
 
-    async def click_element(self, selector: str):
-        await self.page.click(selector)
-    
-    async def capture_screenshot(self, path: str = "screenshot.png"):
-        await self.page.screenshot(path=path)
+    async def check_element(self, selector: str, iframe_index: int = None):
+        if iframe_index is not None:
+            await self.page.locator('iframe').nth(iframe_index).content_frame.locator(selector).check(timeout=3000)
+        else:
+            await self.page.check(selector, timeout=3000)
+
+    async def click_element(self, selector: str, iframe_index: int = None):
+        if iframe_index is not None:
+            await self.page.locator('iframe').nth(iframe_index).content_frame.locator(selector).click(timeout=5000)
+        else:
+            await self.page.click(selector, timeout=5000)
+
+    async def select_option(self, selector: str, label: str, iframe_index: int = None):
+        if iframe_index is not None:
+            await self.page.locator('iframe').nth(iframe_index).content_frame.locator(selector).select_option(label=label, timeout=3000)
+        else:
+            await self.page.select_option(selector, label=label, timeout=3000)
 
     async def minimize_window(self):
         """Minimize the browser window so the React app becomes visible to the user."""
+        if not self.context or not self.page:
+            return
+
+        minimized = False
         try:
             cdp = await self.context.new_cdp_session(self.page)
             window = await cdp.send("Browser.getWindowForTarget")
@@ -61,13 +82,41 @@ class PlaywrightService:
                 "bounds": {"windowState": "minimized"}
             })
             await cdp.detach()
+            minimized = True
             print("[PlaywrightService] Browser window minimized.")
         except Exception as e:
-            print(f"[PlaywrightService] Could not minimize window: {e}")
+            print(f"[PlaywrightService] CDP minimize failed: {e}")
+
+        if not minimized:
+            # Fallback: move the window off-screen when CDP minimize is unavailable
+            try:
+                cdp = await self.context.new_cdp_session(self.page)
+                window = await cdp.send("Browser.getWindowForTarget")
+                await cdp.send("Browser.setWindowBounds", {
+                    "windowId": window["windowId"],
+                    "bounds": {
+                        "left": -32000,
+                        "top": -32000,
+                        "width": 800,
+                        "height": 600,
+                        "windowState": "normal",
+                    }
+                })
+                await cdp.detach()
+                print("[PlaywrightService] Browser moved off-screen as minimize fallback.")
+            except Exception as e:
+                print(f"[PlaywrightService] Could not hide browser window: {e}")
+
+    async def yield_to_user(self):
+        """Hide the browser and give the user a moment to switch back to the Scout app."""
+        await self.minimize_window()
+        await asyncio.sleep(0.3)
 
     async def restore_window(self):
         """Restore the browser window and bring it to the front so the user can watch."""
         try:
+            if not self.context or not self.page:
+                return
             cdp = await self.context.new_cdp_session(self.page)
             window = await cdp.send("Browser.getWindowForTarget")
             await cdp.send("Browser.setWindowBounds", {
