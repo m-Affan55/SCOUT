@@ -3,81 +3,129 @@ class DOMExtractor:
     def get_extraction_script() -> str:
         return """
         (() => {
-            const elements = document.querySelectorAll('input:not([type="hidden"]), textarea, select, button, a');
             const tree = [];
             let index = 1;
 
-            elements.forEach(el => {
-                // Skip hidden or disabled elements
-                if (el.disabled || el.offsetParent === null) return;
-                
-                // Skip elements without a useful role/text
-                const tag = el.tagName.toLowerCase();
-                const type = el.getAttribute('type');
-                
-                let label = '';
-                if (el.labels && el.labels.length > 0) {
-                    label = el.labels[0].innerText.trim();
-                } else if (el.hasAttribute('aria-label')) {
-                    label = el.getAttribute('aria-label');
-                } else if (tag === 'button' || tag === 'a') {
-                    label = el.innerText.trim();
-                }
-                
-                // We need *something* to identify the element
-                if (!label && !el.placeholder && !el.id && !el.name && tag !== 'button' && tag !== 'a') return;
-                
-                const elementData = {
-                    index: index++,
-                    tag: tag,
-                    type: type || undefined,
-                    id: el.id || undefined,
-                    name: el.name || undefined,
-                    placeholder: el.placeholder || undefined,
-                    label: label || undefined,
-                    value: el.value || undefined,
-                };
-                
-                if (tag === 'select') {
-                    const options = Array.from(el.options).map(opt => opt.text.trim());
-                    elementData.options = options;
-                }
-                
-                // Keep the exact css selector so we can map index back to it
-                let selector = el.id ? `#${el.id}` : null;
-                if (!selector && el.name) {
-                    selector = `${tag}[name="${el.name}"]`;
-                }
-                if (!selector) {
-                    // Fallback to a unique selector if possible or simple tag
-                    // Not robust for complex pages, but works for simple forms
-                    let path = [];
-                    let current = el;
-                    while (current && current.tagName !== 'HTML') {
-                        let step = current.tagName.toLowerCase();
-                        if (current.id) {
-                            step += `#${current.id}`;
-                            path.unshift(step);
-                            break;
+            function extractFromDocument(doc, iframeIndex) {
+                const elements = doc.querySelectorAll('input:not([type="hidden"]), textarea, select, button, a');
+
+                elements.forEach(el => {
+                    // Skip hidden or disabled elements
+                    if (el.disabled || el.offsetParent === null) return;
+                    
+                    const tag = el.tagName.toLowerCase();
+                    const type = el.getAttribute('type');
+                    
+                    // For links, skip ones with no text and no meaningful href
+                    if (tag === 'a') {
+                        const href = el.getAttribute('href') || '';
+                        const text = el.innerText.trim();
+                        if (!text || href === '#' || href === '' || href.startsWith('javascript:')) return;
+                    }
+                    
+                    let label = '';
+                    if (el.labels && el.labels.length > 0) {
+                        label = el.labels[0].innerText.trim();
+                    } else if (el.hasAttribute('aria-label')) {
+                        label = el.getAttribute('aria-label');
+                    } else if (tag === 'button' || tag === 'a') {
+                        label = el.innerText.trim();
+                    }
+                    
+                    let context = '';
+                    // We need *something* to identify the element
+                    if (!label && !el.placeholder && !el.id && !el.name && tag !== 'button' && tag !== 'a') {
+                        if (el.previousElementSibling && el.previousElementSibling.innerText) {
+                            context = el.previousElementSibling.innerText.trim();
+                        }
+                        if (!context && el.parentElement && el.parentElement.innerText) {
+                            context = el.parentElement.innerText.trim();
+                        }
+                        if (context) {
+                            context = context.replace(/\\n/g, ' ').substring(0, 100).trim();
                         }
                         
-                        let siblingIndex = 1;
-                        let sibling = current.previousElementSibling;
-                        while (sibling) {
-                            if (sibling.tagName === current.tagName) siblingIndex++;
-                            sibling = sibling.previousElementSibling;
-                        }
-                        if (siblingIndex > 1) {
-                            step += `:nth-of-type(${siblingIndex})`;
-                        }
-                        path.unshift(step);
-                        current = current.parentElement;
+                        if (!context) return;
                     }
-                    selector = path.join(' > ');
+                    
+                    const elementData = {
+                        index: index++,
+                        tag: tag,
+                        type: type || undefined,
+                        id: el.id || undefined,
+                        name: el.name || undefined,
+                        placeholder: el.placeholder || undefined,
+                        label: label || undefined,
+                        context: context || undefined,
+                        value: el.value || undefined,
+                    };
+                    
+                    // Add href for links so the LLM can see where they go
+                    if (tag === 'a') {
+                        const href = el.getAttribute('href') || '';
+                        elementData.href = href;
+                    }
+                    
+                    if (tag === 'select') {
+                        const options = Array.from(el.options).map(opt => opt.text.trim());
+                        elementData.options = options;
+                    }
+                    
+                    // Track which iframe the element belongs to
+                    if (iframeIndex !== undefined) {
+                        elementData.iframe_index = iframeIndex;
+                    }
+                    
+                    // Build CSS selector
+                    let selector = el.id ? `#${el.id}` : null;
+                    if (!selector && el.name) {
+                        selector = `${tag}[name="${el.name}"]`;
+                    }
+                    if (!selector) {
+                        let path = [];
+                        let current = el;
+                        while (current && current.tagName !== 'HTML') {
+                            let step = current.tagName.toLowerCase();
+                            if (current.id) {
+                                step += `#${current.id}`;
+                                path.unshift(step);
+                                break;
+                            }
+                            
+                            let siblingIndex = 1;
+                            let sibling = current.previousElementSibling;
+                            while (sibling) {
+                                if (sibling.tagName === current.tagName) siblingIndex++;
+                                sibling = sibling.previousElementSibling;
+                            }
+                            if (siblingIndex > 1) {
+                                step += `:nth-of-type(${siblingIndex})`;
+                            }
+                            path.unshift(step);
+                            current = current.parentElement;
+                        }
+                        selector = path.join(' > ');
+                    }
+                    elementData.selector = selector;
+                    
+                    tree.push(elementData);
+                });
+            }
+
+            // Extract from main document
+            extractFromDocument(document, undefined);
+            
+            // Extract from same-origin iframes
+            const iframes = document.querySelectorAll('iframe');
+            iframes.forEach((iframe, idx) => {
+                try {
+                    const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                    if (iframeDoc) {
+                        extractFromDocument(iframeDoc, idx);
+                    }
+                } catch(e) {
+                    // Cross-origin iframe, skip silently
                 }
-                elementData.selector = selector;
-                
-                tree.push(elementData);
             });
             
             return tree;
@@ -93,6 +141,7 @@ class DOMExtractor:
             if el.get('label'): line += f' label="{el["label"]}"'
             if el.get('placeholder'): line += f' placeholder="{el["placeholder"]}"'
             if el.get('name'): line += f' name="{el["name"]}"'
+            if el.get('context'): line += f' context="{el["context"]}"'
             # Show current value so the LLM knows which fields are already filled
             if el.get('value') and el['tag'] not in ('button', 'a'):
                 line += f' value="{el["value"]}"'

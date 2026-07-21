@@ -76,6 +76,20 @@ async def start_workflow(request: GoalRequest):
     
     return {"status": "started"}
 
+@app.post("/api/workflow/stop")
+async def stop_workflow():
+    global current_workflow_task
+    
+    if current_workflow_task and not current_workflow_task.done():
+        current_workflow_task.cancel()
+        await manager.broadcast({"type": "info", "message": "Workflow stopped by user."})
+        
+    # Immediately close the browser so it doesn't linger
+    await playwright_service.close()
+    
+    await manager.broadcast({"type": "done", "message": "Workflow stopped successfully."})
+    return {"status": "stopped"}
+
 @app.post("/api/workflow/resume")
 async def resume_workflow(data: dict):
     user_input = data.get("input")
@@ -122,6 +136,7 @@ async def run_agent_workflow(goal: str):
                             "step": "Analyzer",
                             "message": state_update.get("user_input_message", "Human input required."),
                             "input_type": state_update.get("user_input_type", "info"),
+                            "field_key": state_update.get("browser_state", {}).get("pending_field_key", "")
                         })
                         return 
                     else:
@@ -156,6 +171,7 @@ async def resume_agent_workflow(user_input: str):
                             "step": "Analyzer",
                             "message": state_update.get("user_input_message", "Human input required."),
                             "input_type": state_update.get("user_input_type", "info"),
+                            "field_key": state_update.get("browser_state", {}).get("pending_field_key", "")
                         })
                         return
                     else:

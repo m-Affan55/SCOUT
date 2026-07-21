@@ -11,11 +11,12 @@
     "blood_group": "",
     "religion": "",
     "nationality": "Pakistani",
-    "domicile": "Punjab"
+    "domicile": "Punjab",
+    "password": "i don;t have an account"
   },
   "address": {
     "street": "",
-    "city": "Lahore",
+    "city": "lahore",
     "province": "Punjab",
     "postal_code": "",
     "country": "Pakistan"
@@ -56,5 +57,7 @@
     "passport_photo": "",
     "resume": "",
     "domicile_certificate": ""
-  }
+  },
+  "captcha_solved": "https://admissions.nu.edu.pk/OLAR/Login",
+  "clarification": "https://admissions.nu.edu.pk/OLAR/Login"
 }

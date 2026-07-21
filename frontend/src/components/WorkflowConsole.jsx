@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Terminal, Bot, User, CheckCircle2, Loader2, Play, AlertCircle } from 'lucide-react';
+import { Terminal, Bot, User, CheckCircle2, Loader2, Play, AlertCircle, Square } from 'lucide-react';
 import InputModal from './InputModal';
 import '../styles/WorkflowConsole.css';
 
@@ -89,14 +89,27 @@ export default function WorkflowConsole() {
     }
   };
 
+  const handleStop = async () => {
+    try {
+      await fetch('http://localhost:8000/api/workflow/stop', {
+        method: 'POST'
+      });
+      setStatus('idle');
+      setPauseData(null);
+    } catch (error) {
+      console.error("Failed to stop workflow:", error);
+    }
+  };
+
   const handleResume = async () => {
-    if (!otpInput.trim()) return;
+    // If it's a captcha, we don't need text input
+    if (pauseData?.field_key !== 'captcha_solved' && !otpInput.trim()) return;
 
     try {
       await fetch('http://localhost:8000/api/workflow/resume', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: otpInput })
+        body: JSON.stringify({ input: otpInput || 'solved' })
       });
       setStatus('running');
       setPauseData(null);
@@ -144,17 +157,28 @@ export default function WorkflowConsole() {
           placeholder="What do you want to automate?" 
           value={goal}
           onChange={(e) => setGoal(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && handleStart()}
+          onKeyDown={(e) => e.key === 'Enter' && status === 'idle' && handleStart()}
           disabled={status !== 'idle'}
         />
-        <button 
-          className="btn-primary" 
-          onClick={handleStart}
-          disabled={status !== 'idle' || !goal.trim()}
-        >
-          <Play size={16} fill="currentColor" />
-          Run
-        </button>
+        {status === 'idle' ? (
+          <button 
+            className="btn-primary" 
+            onClick={handleStart}
+            disabled={!goal.trim()}
+          >
+            <Play size={16} fill="currentColor" />
+            Run
+          </button>
+        ) : (
+          <button 
+            className="btn-primary" 
+            style={{ backgroundColor: '#ef4444', borderColor: '#ef4444' }}
+            onClick={handleStop}
+          >
+            <Square size={16} fill="currentColor" />
+            Stop
+          </button>
+        )}
       </div>
 
       {status === 'paused' && (

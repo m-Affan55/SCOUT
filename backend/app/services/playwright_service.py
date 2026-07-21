@@ -33,27 +33,48 @@ class PlaywrightService:
             await self.start()
         
         try:
-            await self.page.goto(url)
             await self.restore_window()
+            await self.page.goto(url, wait_until="domcontentloaded", timeout=60000)
         except Exception as e:
             # Fallback if the connection was lost just before navigating
             print(f"[PlaywrightService] Connection error during goto, restarting browser: {e}")
             await self.start()
-            await self.page.goto(url)
             await self.restore_window()
+            await self.page.goto(url, wait_until="domcontentloaded", timeout=60000)
 
-    async def fill_input(self, selector: str, text: str):
-        await self.page.fill(selector, text)
+    async def fill_input(self, selector: str, text: str, iframe_index: int = None):
+        try:
+            if iframe_index is not None:
+                await self.page.locator('iframe').nth(iframe_index).content_frame.locator(selector).fill(text)
+            else:
+                await self.page.fill(selector, text)
+        except Exception as e:
+            print(f"[PlaywrightService] Failed to fill {selector}: {e}")
 
-    async def click_element(self, selector: str):
-        await self.page.click(selector)
-    
-    async def capture_screenshot(self, path: str = "screenshot.png"):
+    async def click_element(self, selector: str, iframe_index: int = None):
+        try:
+            if iframe_index is not None:
+                await self.page.locator('iframe').nth(iframe_index).content_frame.locator(selector).click(timeout=10000)
+            else:
+                await self.page.click(selector, timeout=10000)
+        except Exception as e:
+            print(f"[PlaywrightService] Failed to click {selector}: {e}")
+
+    async def select_option(self, selector: str, label: str, iframe_index: int = None):
+        try:
+            if iframe_index is not None:
+                await self.page.locator('iframe').nth(iframe_index).content_frame.locator(selector).select_option(label=label)
+            else:
+                await self.page.select_option(selector, label=label)
+        except Exception as e:
+            print(f"[PlaywrightService] Failed to select option {selector}: {e}")
         await self.page.screenshot(path=path)
 
     async def minimize_window(self):
         """Minimize the browser window so the React app becomes visible to the user."""
         try:
+            if not self.context or not self.page:
+                return
             cdp = await self.context.new_cdp_session(self.page)
             window = await cdp.send("Browser.getWindowForTarget")
             await cdp.send("Browser.setWindowBounds", {
@@ -68,6 +89,8 @@ class PlaywrightService:
     async def restore_window(self):
         """Restore the browser window and bring it to the front so the user can watch."""
         try:
+            if not self.context or not self.page:
+                return
             cdp = await self.context.new_cdp_session(self.page)
             window = await cdp.send("Browser.getWindowForTarget")
             await cdp.send("Browser.setWindowBounds", {
