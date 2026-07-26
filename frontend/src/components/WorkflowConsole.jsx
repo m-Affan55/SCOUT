@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Terminal, Bot, User, CheckCircle2, Loader2, Play, AlertCircle, Square } from 'lucide-react';
+import { UserButton } from '@clerk/clerk-react';
 import InputModal from './InputModal';
 import '../styles/WorkflowConsole.css';
 
@@ -28,23 +29,14 @@ export default function WorkflowConsole() {
     } else if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission();
     }
-
-    const originalTitle = document.title;
-    let blinkCount = 0;
-    const blinkTimer = setInterval(() => {
-      document.title = blinkCount % 2 === 0 ? 'Action Required — Scout' : originalTitle;
-      blinkCount += 1;
-      if (blinkCount >= 6) {
-        clearInterval(blinkTimer);
-        document.title = originalTitle;
-      }
-    }, 700);
   };
 
   const connectWebSocket = () => {
     if (!isMounted.current) return;
 
-    const socket = new WebSocket('ws://localhost:8000/ws');
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    const wsUrl = apiUrl.replace('http', 'ws');
+    const socket = new WebSocket(`${wsUrl}/ws`);
 
     socket.onopen = () => {
       console.log('[Scout] WebSocket connected');
@@ -64,6 +56,11 @@ export default function WorkflowConsole() {
         setStatus('paused');
         setPauseData(data);
         notifyUserActionRequired(data);
+      } else if (data.type === 'resume_ack') {
+        // Input was submitted from the browser overlay — clear the React modal
+        setStatus('running');
+        setPauseData(null);
+        setOtpInput('');
       }
     };
 
@@ -106,10 +103,16 @@ export default function WorkflowConsole() {
     setStatus('running');
     setMessages([{ type: 'user', message: goal }]);
     
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    
     try {
-      await fetch('http://localhost:8000/api/workflow/start', {
+      const token = await window.Clerk?.session?.getToken();
+      await fetch(`${apiUrl}/api/workflow/start`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({ goal })
       });
       setGoal('');
@@ -120,9 +123,15 @@ export default function WorkflowConsole() {
   };
 
   const handleStop = async () => {
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    
     try {
-      await fetch('http://localhost:8000/api/workflow/stop', {
-        method: 'POST'
+      const token = await window.Clerk?.session?.getToken();
+      await fetch(`${apiUrl}/api/workflow/stop`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
       });
       setStatus('idle');
       setPauseData(null);
@@ -132,14 +141,22 @@ export default function WorkflowConsole() {
   };
 
   const handleResume = async () => {
-    // If it's a captcha, we don't need text input
-    if (pauseData?.field_key !== 'captcha_solved' && !otpInput.trim()) return;
+    const isContinueOnly = pauseData?.input_type === 'continue_only' || pauseData?.field_key === 'captcha_solved';
+    // For continue_only, no text needed. For others, require text input.
+    if (!isContinueOnly && !otpInput.trim()) return;
 
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    
     try {
-      await fetch('http://localhost:8000/api/workflow/resume', {
+      const token = await window.Clerk?.session?.getToken();
+      const inputValue = isContinueOnly ? 'confirmed' : otpInput;
+      await fetch(`${apiUrl}/api/workflow/resume`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: otpInput || 'solved' })
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ input: inputValue })
       });
       setStatus('running');
       setPauseData(null);
@@ -152,12 +169,17 @@ export default function WorkflowConsole() {
   return (
     <div className="app-container">
       <header className="header">
-        <h1><Terminal size={20} /> Scout</h1>
-        <div className={`status-badge ${status}`}>
-          {status === 'running' && <Loader2 size={16} className="animate-spin" style={{ animation: 'spin 1s linear infinite' }} />}
-          {status === 'paused' && <AlertCircle size={16} />}
-          {status === 'idle' && <CheckCircle2 size={16} />}
-          {status === 'idle' ? 'Ready' : status === 'paused' ? 'Action Required' : 'Running'}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <h1><Terminal size={20} /> Scout</h1>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+          <div className={`status-badge ${status}`}>
+            {status === 'running' && <Loader2 size={16} className="animate-spin" style={{ animation: 'spin 1s linear infinite' }} />}
+            {status === 'paused' && <AlertCircle size={16} />}
+            {status === 'idle' && <CheckCircle2 size={16} />}
+            {status === 'idle' ? 'Ready' : status === 'paused' ? 'Action Required' : 'Running'}
+          </div>
+          <UserButton afterSignOutUrl="/sign-in" />
         </div>
       </header>
 
@@ -211,14 +233,13 @@ export default function WorkflowConsole() {
         )}
       </div>
 
-      {status === 'paused' && (
-        <InputModal 
-          pauseData={pauseData}
-          otpInput={otpInput}
-          setOtpInput={setOtpInput}
-          handleResume={handleResume}
-        />
-      )}
+      {/* Pause / Input Modal — rendered when any pause fires */}
+      <InputModal
+        pauseData={pauseData}
+        otpInput={otpInput}
+        setOtpInput={setOtpInput}
+        handleResume={handleResume}
+      />
     </div>
   );
 }
