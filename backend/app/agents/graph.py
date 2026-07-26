@@ -269,6 +269,64 @@ async def analyzer_node(state: AgentState):
             
         return {"requires_user_input": False, "current_url": target_url, "browser_state": {"action": "navigate"}}
 
+    # --- HTTP error page detection ---
+    try:
+        page_title = await playwright_service.page.title()
+        page_url = playwright_service.page.url
+        error_body = await playwright_service.page.evaluate("document.body?.innerText?.substring(0, 500) || ''")
+        error_body_lower = error_body.lower()
+        
+        http_error_detected = False
+        error_msg = ""
+        
+        # Check for common HTTP error patterns
+        for code in ['503', '502', '403', '500']:
+            if code in page_title or f'{code}' in error_body[:200]:
+                http_error_detected = True
+                error_msg = f"The site returned an HTTP {code} error. This may be caused by bot detection or the site being temporarily unavailable."
+                break
+        
+        if not http_error_detected:
+            for phrase in ['service unavailable', 'access denied', 'forbidden', 'server error']:
+                if phrase in error_body_lower:
+                    http_error_detected = True
+                    error_msg = f"The site appears to be blocking access or is unavailable: '{phrase}' detected."
+                    break
+        
+        if http_error_detected:
+            print(f"[Analyzer] HTTP error page detected at {page_url}: {error_msg}")
+            await playwright_service.restore_window()
+            return {
+                "requires_user_input": True,
+                "user_input_message": f"{error_msg} The URL was: {page_url}. Would you like to try a different URL, or should I retry?",
+                "user_input_type": "info",
+                "dom_tree": [],
+                "browser_state": {"pending_field_key": "system.target_url"},
+            }
+        
+        # --- Site migration/relocation detection ---
+        migration_keywords = [
+            'has moved to', 'has been moved to', 'has migrated to',
+            'services have been migrated', 'has been relocated',
+            'site has moved', 'portal has moved', 'now available at',
+            'has been shifted to', 'please visit', 'redirected to',
+        ]
+        for keyword in migration_keywords:
+            if keyword in error_body_lower:
+                print(f"[Analyzer] Site migration notice detected: '{keyword}'")
+                # Try to extract the new destination from the page
+                destination_hint = error_body[:300].strip()
+                await playwright_service.restore_window()
+                return {
+                    "requires_user_input": True,
+                    "user_input_message": f"This site indicates its services have moved. The page says: \"{destination_hint}\" — Would you like me to proceed to the new location? If so, please provide the new URL or say 'yes' to let me find it.",
+                    "user_input_type": "info",
+                    "dom_tree": [],
+                    "browser_state": {"pending_field_key": "clarification"},
+                }
+    except Exception as e:
+        print(f"[Analyzer] Error in HTTP/migration detection: {e}")
+
     # Remove any leftover Scout overlay before reading the page
     try:
         await playwright_service.page.evaluate("document.getElementById('scout-overlay')?.remove()")
@@ -333,7 +391,7 @@ async def analyzer_node(state: AgentState):
     except:
         page_text = ""
 
-    # Check for CAPTCHA
+    # Check for CAPTCHA — iframe-based (reCAPTCHA, hCaptcha, Turnstile)
     has_captcha = False
     try:
         iframes = await playwright_service.page.locator('iframe').all()
@@ -346,6 +404,30 @@ async def analyzer_node(state: AgentState):
                 has_captcha = True
     except:
         pass
+
+    # Check for full-page human verification challenges (Cloudflare interstitials, etc.)
+    if not has_captcha:
+        page_text_lower = page_text.lower()
+        human_verification_phrases = [
+            'verify you are human',
+            'checking your browser',
+            'human verification',
+            'please wait while we verify',
+            'just a moment',
+            'attention required',
+            'checking if the site connection is secure',
+            'please complete the security check',
+            'confirm you are not a robot',
+            'enable javascript and cookies',
+        ]
+        for phrase in human_verification_phrases:
+            if phrase in page_text_lower:
+                # Extra guard: only trigger if the page has very few interactive elements
+                # (a real page with content wouldn't match these conditions)
+                if len(tree) <= 5:
+                    has_captcha = True
+                    print(f"[Analyzer] Full-page human verification detected: '{phrase}'")
+                    break
 
     if has_captcha and not user_input and user_profile.get("captcha_solved") != state.get("current_url", ""):
         print("[Analyzer] CAPTCHA detected. Pausing for manual intervention.")
@@ -469,9 +551,9 @@ USER PROFILE DATA:
 
 STRICT RULES:
 1. Determine if this is a NAVIGATION page (e.g. homepage, menus, no form fields to fill) or a FORM page.
-   - If it's a NAVIGATION page: Find the link or button that best matches the CURRENT STEP in the plan, and click it.
+   - For LOW-STAKES ambiguous navigation (e.g., "Practice" vs "Hire"), make your best guess based on the USER PROFILE context instead of pausing. Use the "reasoning" field to explain your guess.
    - If USER PROFILE contains "clarification", use that value to choose the correct navigation link without asking again.
-   - If the user's intent is ambiguous (e.g., 'apply' could mean Admissions or Careers) and you aren't 100% sure which link to click, you MUST pause and ask the user for clarification.
+   - DO NOT worry about high-stakes actions like payments or account creation, a separate system handles that.
 
 2. ANTI-HALLUCINATION PROTOCOL:
    - NEVER ask the user for information unless there is a physical form field for it in the INTERACTIVE ELEMENTS list above.
@@ -523,6 +605,76 @@ Page is done:
 
     print(f"[Analyzer] LLM decision: {decision}")
     
+    # UI Logging for Autonomous Guesses
+    reasoning = decision.get("reasoning", "")
+    if reasoning:
+        from app.main import manager
+        # Fire and forget broadcast
+        asyncio.create_task(manager.broadcast({"type": "info", "message": f"🤖 Scout: {reasoning}"}))
+        
+    # Autonomous Password Generation
+    try:
+        from urllib.parse import urlparse
+        domain = urlparse(state.get("current_url", "")).netloc.replace("www.", "")
+        if domain and tree:
+            has_password_field = any(el.get("type") == "password" or "password" in str(el.get("name", "")).lower() for el in tree)
+            has_credential = "credentials" in user_profile and domain in user_profile["credentials"]
+            
+            if has_password_field and not has_credential:
+                print(f"[Analyzer] Found password field on {domain}, generating secure password autonomously.")
+                from app.security import generate_secure_password, encrypt_password
+                from app.models import Credential
+                from app.database import SessionLocal
+                db = SessionLocal()
+                try:
+                    new_pass = generate_secure_password()
+                    encrypted = encrypt_password(new_pass)
+                    cred = Credential(user_id=int(user_id), domain=domain, encrypted_password=encrypted)
+                    db.add(cred)
+                    db.commit()
+                    # We inject the new password into the decision fills!
+                    for el in tree:
+                        if el.get("type") == "password" or "password" in str(el.get("name", "")).lower():
+                            if decision.get("action") == "fill_and_click":
+                                # Remove any existing empty fill for this index
+                                decision["fills"] = [f for f in decision.get("fills", []) if f.get("index") != el.get("index")]
+                                decision["fills"].append({"index": el.get("index"), "value": new_pass})
+                except Exception as e:
+                    print(f"[Analyzer] Failed to save password: {e}")
+                finally:
+                    db.close()
+    except Exception as e:
+        print(f"[Analyzer] Error in password generation: {e}")
+
+    # Deterministic High-Stakes Check (Bypass if user just confirmed)
+    if user_input and pending_key == "high_stakes_confirmation":
+        print("[Analyzer] High-stakes action confirmed by user. Proceeding.")
+        # User confirmed, so we use the stored original action
+        original_action = state.get("browser_state", {}).get("original_action")
+        if original_action:
+            decision = original_action
+    elif decision.get("action") in ("click", "fill_and_click") and decision.get("click") is not None:
+        # Only check the CLICKED ELEMENT's text, not the entire page
+        # This prevents false positives from unrelated text elsewhere on the page
+        high_stakes_keywords = ['subscribe', 'checkout', 'payment', 'card number', 'billing', 'terms of service', 'i agree', 'create account', 'confirm purchase', 'pay now', 'submit application', 'place order']
+        
+        click_index = decision.get("click")
+        clicked_el = next((el for el in tree if el.get("index") == click_index), {})
+        el_text = (clicked_el.get("label", "") or "").lower()
+        
+        is_high_stakes = any(kw in el_text for kw in high_stakes_keywords)
+        
+        if is_high_stakes:
+            print(f"[Analyzer] Deterministic HIGH-STAKES check triggered on element: '{el_text}'")
+            # Transform decision into a pause, storing original_action for recovery after confirm
+            decision = {
+                "action": "pause",
+                "message": f"Scout is about to click \"{clicked_el.get('label', 'a button')}\" which may be a high-stakes action. Please review the browser and click Confirm to proceed, or take over manually.",
+                "field_key": "high_stakes_confirmation",
+                "original_action": decision
+            }
+
+    
     if decision.get("action") == "pause":
         pause_message = decision.get("message", "Additional information is required.")
         field_key = decision.get("field_key", "")
@@ -542,12 +694,18 @@ Page is done:
             }
         else:
             await playwright_service.yield_to_user()
+            browser_state_for_pause = {"pending_field_key": field_key}
+            # Preserve original_action for high-stakes confirmations so we can recover it after resume
+            if decision.get("original_action"):
+                browser_state_for_pause["original_action"] = decision["original_action"]
+            # Use continue_only for high-stakes so the modal shows a Confirm button, not a text input
+            pause_input_type = "continue_only" if field_key == "high_stakes_confirmation" else "info"
             return {
                 "requires_user_input": True,
                 "user_input_message": pause_message,
-                "user_input_type": "info",
+                "user_input_type": pause_input_type,
                 "dom_tree": tree,
-                "browser_state": {"pending_field_key": field_key},
+                "browser_state": browser_state_for_pause,
             }
         
     return {"requires_user_input": False, "browser_state": decision, "dom_tree": tree}

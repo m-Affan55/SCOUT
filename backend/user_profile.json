@@ -1,7 +1,7 @@
 {
   "personal": {
-    "first_name": "Muhammad Affan",
-    "last_name": "Khan",
+    "first_name": "Affan",
+    "last_name": "Asim",
     "father_name": "",
     "date_of_birth": "2000-01-15",
     "gender": "Male",
@@ -12,7 +12,7 @@
     "religion": "",
     "nationality": "Pakistani",
     "domicile": "Punjab",
-    "password": "i don;t have an account"
+    "password": "123321AB@c"
   },
   "address": {
     "street": "",
@@ -58,6 +58,8 @@
     "resume": "",
     "domicile_certificate": ""
   },
-  "captcha_solved": "https://admissions.nu.edu.pk/OLAR/Login",
-  "clarification": "yes and i am intersted in CS"
+  "captcha_solved": "https://leetcode.com/accounts/login/",
+  "clarification": "yes",
+  "high_stakes_confirmation": "yes",
+  "email_verification": "ok"
 }
